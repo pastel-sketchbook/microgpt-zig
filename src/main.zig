@@ -600,10 +600,17 @@ pub fn main() !void {
     defer allocator.free(v_buf);
     @memset(v_buf, 0.0);
 
+    // Pre-allocate a reusable buffer for per-step computation graphs.
+    // FixedBufferAllocator avoids mmap/munmap syscalls that page_allocator
+    // would issue on every ArenaAllocator chunk request.
+    const step_buf = try allocator.alloc(u8, 32 * 1024 * 1024); // 32 MB
+    defer allocator.free(step_buf);
+
     // --- Training loop ---
     for (0..num_steps) |step| {
-        // Per-step arena for computation graph
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        // Per-step arena backed by pre-allocated buffer (no syscalls)
+        var fba = std.heap.FixedBufferAllocator.init(step_buf);
+        var arena = std.heap.ArenaAllocator.init(fba.allocator());
         defer arena.deinit();
         const step_alloc = arena.allocator();
 
@@ -655,7 +662,8 @@ pub fn main() !void {
     print("\n--- inference (new, hallucinated names) ---\n", .{});
 
     for (0..20) |sample_idx| {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var fba = std.heap.FixedBufferAllocator.init(step_buf);
+        var arena = std.heap.ArenaAllocator.init(fba.allocator());
         defer arena.deinit();
         const inf_alloc = arena.allocator();
 
