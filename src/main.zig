@@ -118,6 +118,7 @@ const Value = struct {
     children: [MAX_CHILDREN]?*Value,
     local_grads: [MAX_CHILDREN]f64,
     n_children: u8,
+    gen: u32 = 0, // generation counter: replaces HashMap in backward()
 
     fn create(allocator: Allocator, data: f64) !*Value {
         const v = try allocator.create(Value);
@@ -230,12 +231,10 @@ const Value = struct {
     }
 
     /// Backward pass: iterative topological sort then reverse accumulation
-    fn backward(self: *Value, allocator: Allocator) !void {
+    fn backward(self: *Value, allocator: Allocator, generation: u32) !void {
         // Build topological order (iterative DFS)
         var topo: std.ArrayList(*Value) = .empty;
         defer topo.deinit(allocator);
-        var visited = std.AutoHashMap(*Value, void).init(allocator);
-        defer visited.deinit();
 
         const Frame = struct { node: *Value, phase: enum { enter, exit } };
         var stack: std.ArrayList(Frame) = .empty;
@@ -246,12 +245,12 @@ const Value = struct {
             const item = stack.pop().?;
             switch (item.phase) {
                 .enter => {
-                    if (visited.contains(item.node)) continue;
-                    try visited.put(item.node, {});
+                    if (item.node.gen == generation) continue;
+                    item.node.gen = generation;
                     try stack.append(allocator, .{ .node = item.node, .phase = .exit });
                     for (0..item.node.n_children) |i| {
                         if (item.node.children[i]) |child| {
-                            if (!visited.contains(child)) {
+                            if (child.gen != generation) {
                                 try stack.append(allocator, .{ .node = child, .phase = .enter });
                             }
                         }
@@ -612,7 +611,7 @@ pub fn main() !void {
         const loss = try Value.mulScalar(step_alloc, total_loss, 1.0 / n_f);
 
         // Backward
-        try loss.backward(step_alloc);
+        try loss.backward(step_alloc, @intCast(step + 1));
 
         // Adam update
         const lr_t = learning_rate * (1.0 - @as(f64, @floatFromInt(step)) / @as(f64, @floatFromInt(num_steps)));
@@ -704,7 +703,7 @@ test "Value backward simple" {
     const b = try Value.create(alloc, 3.0);
     const c = try Value.mul(alloc, a, b); // c = a * b = 6
     const d = try Value.add(alloc, c, a); // d = c + a = 8
-    try d.backward(alloc);
+    try d.backward(alloc, 1);
 
     // dd/da = dc/da + 1 = b + 1 = 4
     try std.testing.expectApproxEqAbs(4.0, a.grad, 1e-10);

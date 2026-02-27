@@ -84,6 +84,21 @@ Pass any text file (one name per line) as argument:
 zig build run -Doptimize=ReleaseFast -- my_names.txt
 ```
 
+## Performance Enhancements
+
+Baseline (730 LoC, ReleaseFast on Apple Silicon):
+- **4.94s** wall, **4.41s** user, **16.3MB** RSS, **47B** instructions retired
+
+Planned Zig-specific optimizations, applied and measured one at a time:
+
+| # | Enhancement | Rationale | Wall | LoC | Status |
+|---|-------------|-----------|------|-----|--------|
+| 0 | Baseline | — | 4.94s | 730 | done |
+| 1 | Eliminate backward() HashMap | backward() uses `AutoHashMap(*Value, void)` as a visited set — every node requires pointer hashing, collision handling, and dynamic table resizing. Adding a `gen: u32` field to Value and comparing against a per-step generation counter replaces all of this with a single integer compare per node. | 1.52s | 729 | done |
+| 2 | Direct neg/div operations | `neg(a)` allocates a `-1.0` leaf + `mul` node (2 nodes). `div(a,b)` allocates `pow(b,-1)` + `mul` (2 nodes, and `pow` is expensive). Direct implementations halve the node count for these ops, reducing both forward allocation and backward traversal. `softmax()` calls `div` once per logit, so this compounds across the vocab. | — | — | pending |
+| 3 | FixedBufferAllocator for per-step arena | The per-step `ArenaAllocator` uses `page_allocator` as backing, which calls `mmap`/`munmap` every time a new page is needed. Replacing it with a `FixedBufferAllocator` over a single pre-allocated buffer eliminates all syscalls during the step — pure pointer bumps only. | — | — | pending |
+| 4 | Comptime-specialized linear() | `linear()` loops over `w.len` and `row.len` which are runtime values, preventing the compiler from unrolling. Since all call sites use comptime-known dimensions (16, 64, vocab_size), making the sizes `comptime` lets LLVM unroll inner loops and schedule instructions better. | — | — | pending |
+
 ## Reference
 
 Port of Karpathy's [microgpt.py](https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95) — *"The most atomic way to train and run inference for a GPT in pure, dependency-free Python."*
