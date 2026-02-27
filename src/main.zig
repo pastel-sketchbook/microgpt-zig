@@ -206,18 +206,40 @@ const Value = struct {
     }
 
     fn neg(allocator: Allocator, a: *Value) !*Value {
-        const minus_one = try Value.create(allocator, -1.0);
-        return Value.mul(allocator, a, minus_one);
+        const v = try allocator.create(Value);
+        v.* = .{
+            .data = -a.data,
+            .grad = 0,
+            .children = .{ a, null },
+            .local_grads = .{ -1.0, 0 },
+            .n_children = 1,
+        };
+        return v;
     }
 
     fn sub(allocator: Allocator, a: *Value, b: *Value) !*Value {
-        const neg_b = try Value.neg(allocator, b);
-        return Value.add(allocator, a, neg_b);
+        const v = try allocator.create(Value);
+        v.* = .{
+            .data = a.data - b.data,
+            .grad = 0,
+            .children = .{ a, b },
+            .local_grads = .{ 1.0, -1.0 },
+            .n_children = 2,
+        };
+        return v;
     }
 
     fn div(allocator: Allocator, a: *Value, b: *Value) !*Value {
-        const inv_b = try Value.pow(allocator, b, -1.0);
-        return Value.mul(allocator, a, inv_b);
+        const v = try allocator.create(Value);
+        v.* = .{
+            .data = a.data / b.data,
+            .grad = 0,
+            .children = .{ a, b },
+            // d(a/b)/da = 1/b, d(a/b)/db = -a/b^2
+            .local_grads = .{ 1.0 / b.data, -a.data / (b.data * b.data) },
+            .n_children = 2,
+        };
+        return v;
     }
 
     fn addScalar(allocator: Allocator, a: *Value, s: f64) !*Value {
