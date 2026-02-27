@@ -255,12 +255,17 @@ const Value = struct {
     /// Backward pass: iterative topological sort then reverse accumulation
     fn backward(self: *Value, allocator: Allocator, generation: u32) !void {
         // Build topological order (iterative DFS)
+        // Pre-size to avoid repeated ArrayList reallocations in the arena.
+        // Typical graph is ~38K nodes; 40K covers names up to block_size.
+        const estimated_nodes = 40_000;
         var topo: std.ArrayList(*Value) = .empty;
         defer topo.deinit(allocator);
+        try topo.ensureTotalCapacity(allocator, estimated_nodes);
 
         const Frame = struct { node: *Value, phase: enum { enter, exit } };
         var stack: std.ArrayList(Frame) = .empty;
         defer stack.deinit(allocator);
+        try stack.ensureTotalCapacity(allocator, estimated_nodes);
         try stack.append(allocator, .{ .node = self, .phase = .enter });
 
         while (stack.items.len > 0) {
