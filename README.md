@@ -100,6 +100,15 @@ Planned Zig-specific optimizations, applied and measured one at a time:
 | 4 | Comptime-specialized linear() | `linear()` loops over `w.len` and `row.len` which are runtime values, preventing the compiler from knowing the trip count. Since all call sites use comptime-known dimensions (16, 64, vocab_size), making the inner dimension `comptime` gives LLVM a constant trip count for unrolling. In practice: marginal — the bottleneck is heap allocation per node, not loop overhead. | 1.37s | 760 | done |
 | 5 | Pre-size backward() ArrayLists | `topo` and `stack` ArrayLists in backward() start empty and double through ~16 resizes per step to hold ~38K nodes. In an arena allocator, each resize wastes the old buffer (arenas don't free). Over 1000 steps, that's thousands of abandoned buffers and memcpys. Pre-sizing with `ensureTotalCapacity(40_000)` eliminates all resize churn — one allocation per list per step. | 1.08s | 765 | done |
 
+**Part 2** — further candidates targeting allocation and memory access patterns:
+
+| # | Enhancement | Rationale | Wall | LoC | Status |
+|---|-------------|-----------|------|-----|--------|
+| 6 | Persistent topo/stack across steps | Currently backward() allocates fresh `topo` and `stack` ArrayLists each step, even with pre-sizing. Hoisting them out of backward() and reusing across steps (just clear, don't free) eliminates 2 large allocations + deallocations per step entirely. | — | — | pending |
+| 7 | Pool allocator for Value nodes | Each `Value.create/add/mul/...` calls `allocator.create(Value)` individually. A pool allocator that pre-allocates a contiguous slab of Value structs turns each allocation into a pointer bump with no metadata overhead, and improves cache locality since nodes are packed sequentially in memory. | — | — | pending |
+| 8 | Value struct field reordering | The Value struct fields may have suboptimal layout for the backward pass hot path, which reads `grad`, `local_grads`, `children`, and `n_children` in tight succession. Reordering fields so these are contiguous within a cache line (64 bytes) reduces cache misses during gradient accumulation. | — | — | pending |
+| 9 | `@prefetch` in backward pass | The backward traversal iterates `topo` in reverse, accessing each Value's children — a pointer chase with poor spatial locality. Adding `@prefetch` for the next few Values in the topo list lets the CPU overlap memory fetches with gradient computation, hiding L2/L3 latency. | — | — | pending |
+
 ## Reference
 
 Port of Karpathy's [microgpt.py](https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95) — *"The most atomic way to train and run inference for a GPT in pure, dependency-free Python."*
