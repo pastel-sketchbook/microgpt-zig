@@ -1,0 +1,212 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1520" width="700">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9a8b78"/>
+    </marker>
+    <linearGradient id="paperBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fdf9f3"/>
+      <stop offset="25%" style="stop-color:#faf5ec"/>
+      <stop offset="50%" style="stop-color:#f6efe4"/>
+      <stop offset="75%" style="stop-color:#f3ebdd"/>
+      <stop offset="100%" style="stop-color:#efe6d5"/>
+    </linearGradient>
+    <linearGradient id="trainGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f7f1e8"/>
+      <stop offset="100%" style="stop-color:#f0e8db"/>
+    </linearGradient>
+    <linearGradient id="inferGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0e8db"/>
+      <stop offset="100%" style="stop-color:#f7f1e8"/>
+    </linearGradient>
+    <style>
+      .title { font: bold 18px 'Segoe UI', system-ui, sans-serif; fill: #3c2f1e; }
+      .subtitle { font: 13px 'Segoe UI', system-ui, sans-serif; fill: #6b5d4f; }
+      .box-label { font: bold 13px 'SF Mono', 'Fira Code', monospace; fill: #2d2520; }
+      .box-detail { font: 11px 'Segoe UI', system-ui, sans-serif; fill: #5a4e42; }
+      .phase-label { font: bold 14px 'Segoe UI', system-ui, sans-serif; fill: #5a7fa0; letter-spacing: 2px; }
+      .data-text { font: 11px 'SF Mono', 'Fira Code', monospace; fill: #2a6e50; }
+      .dim-text { font: 10px 'SF Mono', 'Fira Code', monospace; fill: #7a6e60; }
+      .section-bg { rx: 12; ry: 12; }
+      .node { rx: 8; ry: 8; stroke-width: 1.5; }
+      .connector { stroke: #9a8b78; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="1520" rx="16" fill="url(#paperBg)"/>
+
+  <!-- Title -->
+  <text x="400" y="42" text-anchor="middle" class="title">microgpt-zig  ·  Training &amp; Inference Pipeline</text>
+  <text x="400" y="62" text-anchor="middle" class="subtitle">Character-level GPT in pure Zig — one file, zero dependencies</text>
+
+  <!-- ================================================================ -->
+  <!-- PHASE 1: SETUP                                                   -->
+  <!-- ================================================================ -->
+  <rect x="30" y="80" width="740" height="250" class="section-bg" fill="#f5efe5" stroke="#d8cfbf" stroke-width="1"/>
+  <text x="56" y="106" class="phase-label">① SETUP</text>
+
+  <!-- Dataset: x=60 y=120 w=200 h=70  bottom=190 right=260 vcenter=155 -->
+  <rect x="60" y="120" width="200" height="70" class="node" fill="#dcedc8" stroke="#7cb342"/>
+  <text x="160" y="148" text-anchor="middle" class="box-label">📄 Load Dataset</text>
+  <text x="160" y="168" text-anchor="middle" class="box-detail">data/input.txt → 32k names</text>
+
+  <!-- Arrow: Dataset right-center → Tokenizer left-center  gap=40 -->
+  <line x1="260" y1="155" x2="300" y2="155" class="connector"/>
+
+  <!-- Tokenizer: x=300 y=120 w=200 h=70  left=300 right=500 vcenter=155 -->
+  <rect x="300" y="120" width="200" height="70" class="node" fill="#e1d5f0" stroke="#9575cd"/>
+  <text x="400" y="148" text-anchor="middle" class="box-label">🔤 Tokenizer</text>
+  <text x="400" y="168" text-anchor="middle" class="box-detail">chars → token IDs + BOS</text>
+
+  <!-- Arrow: Tokenizer right-center → Init Params left-center  gap=40 -->
+  <line x1="500" y1="155" x2="540" y2="155" class="connector"/>
+
+  <!-- Init Params: x=540 y=120 w=200 h=70  left=540 vcenter=155 -->
+  <rect x="540" y="120" width="200" height="70" class="node" fill="#ffe0b2" stroke="#fb8c00"/>
+  <text x="640" y="148" text-anchor="middle" class="box-label">🎲 Init Params</text>
+  <text x="640" y="168" text-anchor="middle" class="box-detail">4,192 random weights</text>
+
+  <!-- Example data flow: x=60 y=210 w=680 h=50  bottom=260 -->
+  <rect x="60" y="210" width="680" height="50" rx="6" fill="#f5f0e6" stroke="#d4c8b4" stroke-width="1"/>
+  <text x="80" y="232" class="data-text">"emma" → [BOS, e, m, m, a, BOS] → [26, 4, 12, 12, 0, 26]</text>
+  <text x="80" y="248" class="dim-text">vocab_size=27 (a-z + BOS)  ·  seed=42  ·  std=0.08</text>
+
+  <!-- Arrow: data flow bottom-center → Training section top -->
+  <line x1="400" y1="260" x2="400" y2="345" class="connector"/>
+
+  <!-- ================================================================ -->
+  <!-- PHASE 2: TRAINING (×1000 steps)   25px gaps between boxes        -->
+  <!-- ================================================================ -->
+  <rect x="30" y="345" width="740" height="690" class="section-bg" fill="url(#trainGrad)" stroke="#d8cfbf" stroke-width="1"/>
+  <text x="56" y="375" class="phase-label">② TRAINING LOOP</text>
+  <text x="260" y="375" class="dim-text">×1000 steps · arena allocator per step</text>
+
+  <!-- Tokenize doc: x=280 y=395 w=240 h=50  bottom=445 right=520 vcenter=420 -->
+  <rect x="280" y="395" width="240" height="50" class="node" fill="#bbdefb" stroke="#42a5f5"/>
+  <text x="400" y="418" text-anchor="middle" class="box-label">Tokenize Document</text>
+  <text x="400" y="434" text-anchor="middle" class="box-detail">pick doc[step % N], encode to tokens</text>
+
+  <!-- Arrow: Tokenize bottom → GPT box top  gap=25 -->
+  <line x1="400" y1="445" x2="400" y2="470" class="connector"/>
+
+  <!-- GPT Forward box (dashed): x=80 y=470 w=640 h=280  bottom=750 -->
+  <rect x="80" y="470" width="640" height="280" rx="10" fill="#faf8f3" stroke="#b8a98e" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="106" y="496" class="phase-label" style="font-size:12px; fill:#6a8eb8;">GPT FORWARD PASS</text>
+  <text x="310" y="496" class="dim-text">for each position in sequence</text>
+
+  <!-- Embedding: x=120 y=510 w=240 h=44  bottom=554 hcenter=240 -->
+  <rect x="120" y="510" width="240" height="44" class="node" fill="#c5cae9" stroke="#5c6bc0"/>
+  <text x="240" y="532" text-anchor="middle" class="box-label">Token + Position Embed</text>
+  <text x="240" y="546" text-anchor="middle" class="box-detail">wte[tok] + wpe[pos] → x[16]</text>
+
+  <!-- Arrow: Embedding bottom → RMSNorm top  gap=18 -->
+  <line x1="240" y1="554" x2="240" y2="572" class="connector"/>
+
+  <!-- RMSNorm: x=120 y=572 w=240 h=36  bottom=608 hcenter=240 -->
+  <rect x="120" y="572" width="240" height="36" class="node" fill="#d1c4e9" stroke="#7e57c2"/>
+  <text x="240" y="596" text-anchor="middle" class="box-label">RMSNorm</text>
+
+  <!-- Arrow: RMSNorm bottom → Attention top  gap=18 -->
+  <line x1="240" y1="608" x2="240" y2="626" class="connector"/>
+
+  <!-- Attention: x=120 y=626 w=560 h=44  bottom=670 hcenter=400 -->
+  <rect x="120" y="626" width="560" height="44" class="node" fill="#fff9c4" stroke="#fbc02d"/>
+  <text x="400" y="648" text-anchor="middle" class="box-label">Multi-Head Attention (4 heads × dim 4)</text>
+  <text x="400" y="662" text-anchor="middle" class="box-detail">Q·Kᵀ/√d → softmax → weighted V · Wₒ  +  residual</text>
+
+  <!-- Arrow: Attention bottom → MLP top  gap=18 -->
+  <line x1="400" y1="670" x2="400" y2="688" class="connector"/>
+
+  <!-- MLP: x=120 y=688 w=560 h=44  bottom=732 hcenter=400 -->
+  <rect x="120" y="688" width="560" height="44" class="node" fill="#b2dfdb" stroke="#26a69a"/>
+  <text x="400" y="710" text-anchor="middle" class="box-label">MLP (fc1 → ReLU → fc2)</text>
+  <text x="400" y="724" text-anchor="middle" class="box-detail">16 → 64 → ReLU → 16  +  residual</text>
+
+  <!-- Arrow: GPT box bottom → Softmax top  gap=25 -->
+  <line x1="400" y1="750" x2="400" y2="775" class="connector"/>
+
+  <!-- Softmax+Loss: x=200 y=775 w=400 h=50  bottom=825 hcenter=400 -->
+  <rect x="200" y="775" width="400" height="50" class="node" fill="#ffcdd2" stroke="#ef5350"/>
+  <text x="400" y="798" text-anchor="middle" class="box-label">Softmax → Cross-Entropy Loss</text>
+  <text x="400" y="814" text-anchor="middle" class="box-detail">logits → probs → -log(prob[target]) → avg loss</text>
+
+  <!-- Arrow: Softmax bottom → Backward top  gap=25 -->
+  <line x1="400" y1="825" x2="400" y2="850" class="connector"/>
+
+  <!-- Backward: x=200 y=850 w=400 h=50  bottom=900 hcenter=400 -->
+  <rect x="200" y="850" width="400" height="50" class="node" fill="#ffe0cc" stroke="#ff7043"/>
+  <text x="400" y="873" text-anchor="middle" class="box-label">⬅ Backward (Autograd)</text>
+  <text x="400" y="889" text-anchor="middle" class="box-detail">topo sort → reverse accumulate gradients</text>
+
+  <!-- Arrow: Backward bottom → Adam top  gap=25 -->
+  <line x1="400" y1="900" x2="400" y2="925" class="connector"/>
+
+  <!-- Adam: x=200 y=925 w=400 h=50  bottom=975 right=600 vcenter=950 -->
+  <rect x="200" y="925" width="400" height="50" class="node" fill="#b2ebf2" stroke="#00bcd4"/>
+  <text x="400" y="948" text-anchor="middle" class="box-label">Adam Optimizer Update</text>
+  <text x="400" y="964" text-anchor="middle" class="box-detail">lr decay · m̂ = m/(1-β₁ᵗ) · v̂ = v/(1-β₂ᵗ) · Δw</text>
+
+  <!-- Loop arrow: Adam right-center (600,950) → Tokenize doc right-center (520,420) -->
+  <path d="M 600 950 Q 740 950 740 420 L 520 420" class="connector" stroke-dasharray="6,3" style="stroke:#6a8eb8"/>
+  <text x="748" y="680" class="dim-text" transform="rotate(90, 748, 680)">repeat ×1000</text>
+
+  <!-- Loss example: x=60 y=990 w=680 h=30  bottom=1020 -->
+  <rect x="60" y="990" width="680" height="30" rx="6" fill="#f5f0e6" stroke="#d4c8b4" stroke-width="1"/>
+  <text x="80" y="1011" class="data-text">step 1000/1000 | loss 2.0760  ✓  (model has learned character patterns)</text>
+
+  <!-- Arrow: Training section bottom → Inference section top -->
+  <line x1="400" y1="1035" x2="400" y2="1080" class="connector"/>
+
+  <!-- ================================================================ -->
+  <!-- PHASE 3: INFERENCE   21px gaps between boxes                     -->
+  <!-- ================================================================ -->
+  <rect x="30" y="1080" width="740" height="420" class="section-bg" fill="url(#inferGrad)" stroke="#d8cfbf" stroke-width="1"/>
+  <text x="56" y="1110" class="phase-label">③ INFERENCE</text>
+  <text x="220" y="1110" class="dim-text">generate 20 new names · temperature=0.5</text>
+
+  <!-- BOS token: x=300 y=1125 w=200 h=44  bottom=1169 hcenter=400 -->
+  <rect x="300" y="1125" width="200" height="44" class="node" fill="#d1c4e9" stroke="#7e57c2"/>
+  <text x="400" y="1148" text-anchor="middle" class="box-label">Start with BOS token</text>
+  <text x="400" y="1162" text-anchor="middle" class="box-detail">token_id = 26</text>
+
+  <!-- Arrow: BOS bottom → GPT Forward top  gap=21 -->
+  <line x1="400" y1="1169" x2="400" y2="1190" class="connector"/>
+
+  <!-- GPT Forward (infer): x=240 y=1190 w=320 h=44  bottom=1234 right=560 vcenter=1212 -->
+  <rect x="240" y="1190" width="320" height="44" class="node" fill="#bbdefb" stroke="#42a5f5"/>
+  <text x="400" y="1213" text-anchor="middle" class="box-label">GPT Forward (no backward)</text>
+  <text x="400" y="1229" text-anchor="middle" class="box-detail">same architecture, frozen weights</text>
+
+  <!-- Arrow: GPT Forward bottom → Temp top  gap=21 -->
+  <line x1="400" y1="1234" x2="400" y2="1255" class="connector"/>
+
+  <!-- Temp+softmax: x=240 y=1255 w=320 h=44  bottom=1299 -->
+  <rect x="240" y="1255" width="320" height="44" class="node" fill="#fff9c4" stroke="#fbc02d"/>
+  <text x="400" y="1278" text-anchor="middle" class="box-label">logits / temperature → Softmax</text>
+  <text x="400" y="1294" text-anchor="middle" class="box-detail">lower temp = more confident picks</text>
+
+  <!-- Arrow: Temp bottom → Sample top  gap=21 -->
+  <line x1="400" y1="1299" x2="400" y2="1320" class="connector"/>
+
+  <!-- Sample: x=240 y=1320 w=320 h=44  bottom=1364 right=560 vcenter=1342 -->
+  <rect x="240" y="1320" width="320" height="44" class="node" fill="#b2dfdb" stroke="#26a69a"/>
+  <text x="400" y="1343" text-anchor="middle" class="box-label">Weighted Random Sample</text>
+  <text x="400" y="1359" text-anchor="middle" class="box-detail">pick next char from probability dist</text>
+
+  <!-- Loop arrow: Sample right-center (560,1342) → GPT Forward right-center (560,1212) -->
+  <path d="M 560 1342 Q 650 1342 650 1212 L 560 1212" class="connector" stroke-dasharray="6,3" style="stroke:#7e57c2"/>
+  <text x="658" y="1277" class="dim-text" transform="rotate(90, 658, 1277)">until BOS</text>
+
+  <!-- Arrow: Sample bottom → Decision top  gap=21 -->
+  <line x1="400" y1="1364" x2="400" y2="1385" class="connector"/>
+
+  <!-- Decision: x=260 y=1385 w=280 h=36  bottom=1421 -->
+  <rect x="260" y="1385" width="280" height="36" class="node" fill="#ffcdd2" stroke="#ef5350"/>
+  <text x="400" y="1409" text-anchor="middle" class="box-label">BOS? → stop · else → append char</text>
+
+  <!-- Output examples: x=60 y=1442 w=680 h=50  bottom=1492 -->
+  <rect x="60" y="1442" width="680" height="50" rx="6" fill="#f5f0e6" stroke="#d4c8b4" stroke-width="1"/>
+  <text x="80" y="1460" class="data-text">sample  1: vemare     sample  5: kasir      sample  9: arilia</text>
+  <text x="80" y="1480" class="data-text">sample  2: rileen     sample  6: marir      sample 10: alaba</text>
+
+</svg>

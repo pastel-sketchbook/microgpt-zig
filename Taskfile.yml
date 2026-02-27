@@ -1,0 +1,54 @@
+version: "3"
+env:
+  PGM_NAME: microgpt-zig
+tasks:
+  build:
+    desc: Build the project
+    cmds:
+      - zig build
+
+  build:release:
+    desc: Build in release mode
+    cmds:
+      - zig build -Doptimize=ReleaseFast
+
+  run:
+    desc: Build and run
+    cmds:
+      - zig build run
+
+  run:release:
+    desc: Build and run in release mode
+    cmds:
+      - zig build run -Doptimize=ReleaseFast
+
+  demo:
+    desc: Train a tiny GPT on names dataset and generate new names (ReleaseFast)
+    cmds:
+      - echo "=== microgpt-zig demo ==="
+      - echo "Training a 1-layer, 16-dim GPT on character-level names for 1000 steps..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast
+
+  demo:korean:
+    desc: Train on Korean (Hangul) names and generate new ones
+    cmds:
+      - echo "=== microgpt-zig demo (Korean/한국어) ==="
+      - echo "Training a 1-layer, 16-dim GPT on Hangul names for 1000 steps..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast -- data/korean_names.txt
+
+  test:
+    desc: Run tests
+    cmds:
+      - zig build test
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf zig-out .zig-cache
+
+  loc:
+    desc: Count lines of code
+    cmds:
+      - tokei
