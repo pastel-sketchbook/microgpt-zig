@@ -304,12 +304,13 @@ const Value = struct {
 // ============================================================================
 
 /// linear(x, w) = [sum(wi * xi) for wo in w]
-fn linear(allocator: Allocator, x: []const *Value, w: []const []const *Value) ![]*Value {
+/// in_dim is comptime so LLVM can unroll the inner dot-product loop.
+fn linear(comptime in_dim: usize, allocator: Allocator, x: []const *Value, w: []const []const *Value) ![]*Value {
     const result = try allocator.alloc(*Value, w.len);
     for (w, 0..) |row, i| {
         var sum_val = try Value.create(allocator, 0.0);
-        for (row, 0..) |wi, j| {
-            const prod = try Value.mul(allocator, wi, x[j]);
+        for (0..in_dim) |j| {
+            const prod = try Value.mul(allocator, row[j], x[j]);
             sum_val = try Value.add(allocator, sum_val, prod);
         }
         result[i] = sum_val;
@@ -467,9 +468,9 @@ fn gpt(allocator: Allocator, sd: *const StateDict, token_id: usize, pos_id: usiz
         const x_residual = x;
         x = try rmsnorm(allocator, x);
 
-        const q = try linear(allocator, x, sd.attn_wq[li]);
-        const k = try linear(allocator, x, sd.attn_wk[li]);
-        const v = try linear(allocator, x, sd.attn_wv[li]);
+        const q = try linear(n_embd, allocator, x, sd.attn_wq[li]);
+        const k = try linear(n_embd, allocator, x, sd.attn_wk[li]);
+        const v = try linear(n_embd, allocator, x, sd.attn_wv[li]);
 
         try kv.keys[li].append(allocator, k);
         try kv.values[li].append(allocator, v);
@@ -508,7 +509,7 @@ fn gpt(allocator: Allocator, sd: *const StateDict, token_id: usize, pos_id: usiz
             }
         }
 
-        x = try linear(allocator, x_attn, sd.attn_wo[li]);
+        x = try linear(n_embd, allocator, x_attn, sd.attn_wo[li]);
         for (0..n_embd) |i| {
             x[i] = try Value.add(allocator, x[i], x_residual[i]);
         }
@@ -516,17 +517,17 @@ fn gpt(allocator: Allocator, sd: *const StateDict, token_id: usize, pos_id: usiz
         // 2) MLP
         const x_residual2 = x;
         x = try rmsnorm(allocator, x);
-        x = try linear(allocator, x, sd.mlp_fc1[li]);
+        x = try linear(n_embd, allocator, x, sd.mlp_fc1[li]);
         for (0..4 * n_embd) |i| {
             x[i] = try Value.relu(allocator, x[i]);
         }
-        x = try linear(allocator, x, sd.mlp_fc2[li]);
+        x = try linear(4 * n_embd, allocator, x, sd.mlp_fc2[li]);
         for (0..n_embd) |i| {
             x[i] = try Value.add(allocator, x[i], x_residual2[i]);
         }
     }
 
-    return try linear(allocator, x, sd.lm_head);
+    return try linear(n_embd, allocator, x, sd.lm_head);
 }
 
 // ============================================================================
