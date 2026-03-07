@@ -23,10 +23,10 @@ tasks:
       - zig build run -Doptimize=ReleaseFast
 
   demo:
-    desc: Train on saju four-pillar data and generate new pillars (default)
+    desc: Train on element-annotated saju four-pillar data and generate new pillars
     cmds:
-      - echo "=== microgpt-zig demo (사주/四柱) ==="
-      - echo "Training a 1-layer, 32-dim GPT on Hanja four-pillar data for 1000 steps..."
+      - echo "=== microgpt-zig demo (사주/四柱 + 오행/五行) ==="
+      - echo "Training a 1-layer, 32-dim GPT on element-annotated Hanja data for 1000 steps..."
       - echo ""
       - zig build run -Doptimize=ReleaseFast
 
@@ -37,6 +37,14 @@ tasks:
       - echo "Training a 1-layer, 32-dim GPT on character-level names for 1000 steps..."
       - echo ""
       - zig build run -Doptimize=ReleaseFast -- data/input.txt
+
+  demo:pillars:
+    desc: Train on plain saju four-pillar data (no elements)
+    cmds:
+      - echo "=== microgpt-zig demo (사주/四柱 pillars only) ==="
+      - echo "Training on plain Hanja four-pillar data for 1000 steps..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast -- data/saju_pillars.txt
 
   demo:korean:
     desc: Train on Korean (Hangul) names and generate new ones
@@ -52,7 +60,7 @@ tasks:
       - echo "=== microgpt-zig conditional generation ==="
       - echo "Completing from prefix {{.PREFIX}}..."
       - echo ""
-      - zig build run -Doptimize=ReleaseFast -- data/saju_pillars.txt {{.PREFIX}}
+      - zig build run -Doptimize=ReleaseFast -- data/saju_pillars_elements.txt {{.PREFIX}}
     vars:
       PREFIX: '{{.PREFIX | default "壬申"}}'
 

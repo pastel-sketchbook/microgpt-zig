@@ -1,6 +1,6 @@
 # 0005: Element-Annotated Training Data
 
-**Status**: Proposed
+**Status**: Implemented
 **Branch**: `saju`
 **Date**: 2026-03-07
 **Depends on**: 0001, 0002
@@ -186,3 +186,57 @@ shuf all_pillars_elements.txt | head -30000 > saju_pillars_elements.txt
    Yin-yang is already encoded in the stem/branch parity and adds less
    information than elements. Could be added later as a third annotation
    section if needed.
+
+## Results
+
+### Training metrics
+
+| Metric       | Before (0002) | After (0005) | Notes |
+|-------------|---------------|--------------|-------|
+| Vocab size   | 23            | 29           | +5 elements +1 separator |
+| Params       | 14,272        | 14,912       | +640 from larger vocab embeddings |
+| Tokens/doc   | 8             | 17           | 8 pillars + "|" + 8 elements |
+| Loss (start) | 3.48          | 3.54         | Similar (log(29) ≈ 3.37) |
+| Loss (end)   | ~1.76         | ~0.88        | **2x lower!** |
+| block_size   | 16            | 24           | Increased for 19-token docs |
+| step_buf     | 128 MB        | 256 MB       | Doubled for larger computation graphs |
+
+The per-token loss dropped dramatically (1.76 → 0.88) because the element
+tokens after the separator are near-deterministic given the pillar portion.
+The model learns the pillar→element mapping perfectly.
+
+### Inference (20 samples)
+
+- **19/20 valid** (95% acceptance rate)
+- **1 rejection**: five-rat violation (same failure mode as before)
+- **0 element mismatches**: every valid sample had correct element annotations
+- All samples generated the complete `pillars|elements` format
+
+### Sample output
+
+```
+sample  1: 戊辰庚子辛未丙午|土土金水金土火火
+sample  2: 乙亥壬申辛酉甲辰|木水水金金金木土
+sample  3: 癸卯甲子辛亥甲辰|水木木水金水木土
+sample  4: 戊辰戊戌乙巳壬申|土土土土木火水金
+sample  5: 乙亥乙亥甲辰乙亥|木水木水木土木水
+...
+sample 11: 壬戌辛酉癸亥己巳|水土金金水水土火  [five-rat violation]
+```
+
+### Key observations
+
+1. **Element mapping learned perfectly**: The model never produced an
+   incorrect element for a given pillar character. This validates that
+   even a small GPT can learn simple deterministic mappings from data.
+
+2. **Lower per-token loss**: The easy element predictions bring the average
+   loss down significantly. The pillar tokens still have the same entropy,
+   but the element tokens (deterministic given pillars) approach zero loss.
+
+3. **Same saju validity rate**: The pillar generation quality is unchanged
+   (95% valid), confirming that the added element tokens don't interfere
+   with pillar pattern learning.
+
+4. **Separator learned trivially**: The model always produces `|` at
+   position 8, as predicted.

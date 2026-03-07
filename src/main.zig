@@ -3,11 +3,12 @@ const math = std.math;
 const Allocator = std.mem.Allocator;
 
 // ============================================================================
-// Hyperparameters (tuned for Hanja four-pillar data: 8 codepoints per doc)
+// Hyperparameters (tuned for element-annotated Hanja four-pillar data:
+// 8 pillar codepoints + "|" + 8 element codepoints = 17 codepoints per doc)
 // ============================================================================
 const n_layer: usize = 1;
 const n_embd: usize = 32;
-const block_size: usize = 16;
+const block_size: usize = 24;
 const n_head: usize = 4;
 const head_dim: usize = n_embd / n_head;
 const num_steps: usize = 1000;
@@ -128,6 +129,16 @@ const Tokenizer = struct {
 const stems = [_]u21{ '甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸' };
 // 지지 (Earthly Branches): 子丑寅卯辰巳午未申酉戌亥
 const branches = [_]u21{ '子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥' };
+// 오행 (Five Elements): 木火土金水
+const elements = [_]u21{ '木', '火', '土', '金', '水' };
+// Separator between pillars and element annotations
+const separator: u21 = '|';
+
+// Stem → element index: 甲乙→木(0), 丙丁→火(1), 戊己→土(2), 庚辛→金(3), 壬癸→水(4)
+const stem_element_idx = [10]usize{ 0, 0, 1, 1, 2, 2, 3, 3, 4, 4 };
+// Branch → element index: 子→水(4), 丑→土(2), 寅→木(0), 卯→木(0), 辰→土(2), 巳→火(1),
+//                         午→火(1), 未→土(2), 申→金(3), 酉→金(3), 戌→土(2), 亥→水(4)
+const branch_element_idx = [12]usize{ 4, 2, 0, 0, 2, 1, 1, 2, 3, 3, 2, 4 };
 
 fn stemIndex(cp: u21) ?usize {
     return for (stems, 0..) |s, i| {
@@ -201,6 +212,41 @@ fn validateSaju(codepoints: []const u21) SajuValidity {
         return .{ .valid = false, .reason = "five-rat violation" };
 
     return ok;
+}
+
+/// Validate an element-annotated saju sequence (17 codepoints: 8 pillars + "|" + 8 elements).
+/// Checks: pillar validity (via validateSaju), separator at position 8, element consistency.
+fn validateAnnotatedSaju(codepoints: []const u21) SajuValidity {
+    if (codepoints.len != 17) return .{ .valid = false, .reason = "annotated length != 17" };
+
+    // Check separator at position 8
+    if (codepoints[8] != separator) return .{ .valid = false, .reason = "missing separator" };
+
+    // Validate the pillar portion (first 8 codepoints)
+    const pillar_validity = validateSaju(codepoints[0..8]);
+    if (!pillar_validity.valid) return pillar_validity;
+
+    // Validate element consistency: each element char must match its pillar char
+    for (0..4) |p| {
+        const si = stemIndex(codepoints[p * 2]).?; // safe: already validated
+        const bi = branchIndex(codepoints[p * 2 + 1]).?;
+
+        // Element portion starts at position 9
+        const stem_elem_cp = codepoints[9 + p * 2];
+        const branch_elem_cp = codepoints[9 + p * 2 + 1];
+
+        // Check stem element
+        const expected_stem_elem = elements[stem_element_idx[si]];
+        if (stem_elem_cp != expected_stem_elem)
+            return .{ .valid = false, .reason = "stem element mismatch" };
+
+        // Check branch element
+        const expected_branch_elem = elements[branch_element_idx[bi]];
+        if (branch_elem_cp != expected_branch_elem)
+            return .{ .valid = false, .reason = "branch element mismatch" };
+    }
+
+    return .{ .valid = true, .reason = "valid" };
 }
 
 // ============================================================================
@@ -352,8 +398,8 @@ const Value = struct {
     fn backward(self: *Value, allocator: Allocator, generation: u32) !void {
         // Build topological order (iterative DFS)
         // Pre-size to avoid repeated ArrayList reallocations in the arena.
-        // With n_embd=32, block_size=16: graph is ~80-120K nodes per step.
-        const estimated_nodes = 150_000;
+        // With n_embd=32, block_size=24: graph is ~150-250K nodes per step.
+        const estimated_nodes = 300_000;
         var topo: std.ArrayList(*Value) = .empty;
         defer topo.deinit(allocator);
         try topo.ensureTotalCapacity(allocator, estimated_nodes);
@@ -673,7 +719,7 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.skip(); // skip program name
-    const input_file = args.next() orelse "data/saju_pillars.txt";
+    const input_file = args.next() orelse "data/saju_pillars_elements.txt";
     const prefix_arg: ?[]const u8 = args.next();
 
     // --- Dataset ---
@@ -749,8 +795,8 @@ pub fn main() !void {
     // Pre-allocate a reusable buffer for per-step computation graphs.
     // FixedBufferAllocator avoids mmap/munmap syscalls that page_allocator
     // would issue on every ArenaAllocator chunk request.
-    // With n_embd=32 and block_size=16 (codepoint tokenizer), ~80-120K nodes.
-    const step_buf = try allocator.alloc(u8, 128 * 1024 * 1024); // 128 MB
+    // With n_embd=32 and block_size=24 (element-annotated), ~150-250K nodes.
+    const step_buf = try allocator.alloc(u8, 256 * 1024 * 1024); // 256 MB
     defer allocator.free(step_buf);
 
     // --- Training loop ---
@@ -862,7 +908,12 @@ pub fn main() !void {
                 }
             }
 
-            const validity = validateSaju(sample_cps.items);
+            const validity = if (sample_cps.items.len == 17)
+                validateAnnotatedSaju(sample_cps.items)
+            else if (sample_cps.items.len == 8)
+                validateSaju(sample_cps.items)
+            else
+                SajuValidity{ .valid = false, .reason = "unexpected length" };
             best_sample = sample;
             best_validity = validity;
             if (validity.valid) break;
@@ -1045,4 +1096,57 @@ test "validateSaju second valid example" {
     const cps = [_]u21{ '乙', '丑', '乙', '亥', '乙', '丑', '乙', '丑' };
     const v = validateSaju(&cps);
     try std.testing.expect(v.valid);
+}
+
+// ============================================================================
+// Element Annotation Validation Tests
+// ============================================================================
+
+test "validateAnnotatedSaju valid" {
+    // 甲子丙寅甲子甲子|木水火木木水木水
+    // Pillars: 甲(0)子(0) 丙(2)寅(2) 甲(0)子(0) 甲(0)子(0)
+    // Elements: 甲→木, 子→水, 丙→火, 寅→木, 甲→木, 子→水, 甲→木, 子→水
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '木', '水', '火', '木', '木', '水', '木', '水' };
+    const v = validateAnnotatedSaju(&cps);
+    try std.testing.expect(v.valid);
+}
+
+test "validateAnnotatedSaju wrong length" {
+    // Only 8 codepoints, not 17
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子' };
+    const v = validateAnnotatedSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("annotated length != 17", v.reason);
+}
+
+test "validateAnnotatedSaju missing separator" {
+    // Position 8 is not '|'
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '木', '木', '水', '火', '木', '木', '水', '木', '水' };
+    const v = validateAnnotatedSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("missing separator", v.reason);
+}
+
+test "validateAnnotatedSaju pillar invalid propagates" {
+    // Valid format but parity mismatch: 甲(0)丑(1)
+    const cps = [_]u21{ '甲', '丑', '丙', '寅', '甲', '子', '甲', '子', '|', '木', '土', '火', '木', '木', '水', '木', '水' };
+    const v = validateAnnotatedSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("parity mismatch", v.reason);
+}
+
+test "validateAnnotatedSaju stem element mismatch" {
+    // Valid pillars but wrong stem element: 甲→木, but we put 火
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '火', '水', '火', '木', '木', '水', '木', '水' };
+    const v = validateAnnotatedSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("stem element mismatch", v.reason);
+}
+
+test "validateAnnotatedSaju branch element mismatch" {
+    // Valid pillars but wrong branch element: 子→水, but we put 金
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '木', '金', '火', '木', '木', '水', '木', '水' };
+    const v = validateAnnotatedSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("branch element mismatch", v.reason);
 }
