@@ -1,6 +1,6 @@
 # 0002: Codepoint-Level Tokenizer
 
-**Status**: Proposed
+**Status**: Implemented
 **Branch**: `saju`
 **Date**: 2026-03-07
 **Depends on**: 0001
@@ -93,10 +93,28 @@ single-byte UTF-8). Passing `data/input.txt` (English names) or
 - **Computation graph**: ~200-300K -> ~80-120K nodes per step
 - **Model focus**: Entirely on pillar-level structure, zero capacity wasted on
   UTF-8 byte recombination
-- **Training loss**: Expected to converge faster and to a lower value since
-  the model has a simpler learning task
-- **Parameter count**: ~15,616 -> ~14,300 (slight reduction from smaller
+- **Parameter count**: ~15,616 -> ~14,272 (slight reduction from smaller
   positional embedding and vocab projection)
+
+## Actual Results
+
+| Metric | Byte-level | Codepoint |
+|--------|-----------|-----------|
+| Vocab size | 36 | 23 |
+| Parameters | 15,616 | 14,272 |
+| Tokens per doc | 24 | 8 |
+| Final per-token loss | ~0.64 | ~1.76 |
+| Per-document loss | 24 x 0.64 = 15.4 | 8 x 1.76 = 14.1 |
+
+The per-token loss is higher because every codepoint token is a meaningful
+choice among 22 Hanja characters. With the byte-level tokenizer, most
+tokens were "easy" UTF-8 continuation bytes (given the first byte of a
+3-byte sequence, the continuation bytes are heavily constrained). This
+artificially deflated the average per-token loss.
+
+The per-document loss is comparable or slightly lower, confirming the model
+performs at least as well on the actual prediction task. Generated samples
+are valid-looking 8-character Hanja sequences.
 
 ## Risks
 

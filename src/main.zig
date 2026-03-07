@@ -3,11 +3,11 @@ const math = std.math;
 const Allocator = std.mem.Allocator;
 
 // ============================================================================
-// Hyperparameters (tuned for Hanja four-pillar data: 24 UTF-8 bytes per doc)
+// Hyperparameters (tuned for Hanja four-pillar data: 8 codepoints per doc)
 // ============================================================================
 const n_layer: usize = 1;
 const n_embd: usize = 32;
-const block_size: usize = 32;
+const block_size: usize = 16;
 const n_head: usize = 4;
 const head_dim: usize = n_embd / n_head;
 const num_steps: usize = 1000;
@@ -59,27 +59,29 @@ fn loadOrDownloadDataset(allocator: Allocator, filename: []const u8) ![][]const 
 // Tokenizer
 // ============================================================================
 const Tokenizer = struct {
-    uchars: []const u8, // sorted unique characters
+    uchars: []u21, // sorted unique codepoints
     bos: usize, // BOS token id
     vocab_size: usize,
 
     fn init(allocator: Allocator, docs: []const []const u8) !Tokenizer {
-        // Collect unique characters
-        var char_set = std.AutoHashMap(u8, void).init(allocator);
-        defer char_set.deinit();
+        // Collect unique Unicode codepoints
+        var cp_set = std.AutoHashMap(u21, void).init(allocator);
+        defer cp_set.deinit();
         for (docs) |doc| {
-            for (doc) |ch| {
-                try char_set.put(ch, {});
+            const view = std.unicode.Utf8View.initUnchecked(doc);
+            var iter = view.iterator();
+            while (iter.nextCodepoint()) |cp| {
+                try cp_set.put(cp, {});
             }
         }
         // Sort them
-        var chars: std.ArrayList(u8) = .empty;
-        var it = char_set.keyIterator();
+        var cps: std.ArrayList(u21) = .empty;
+        var it = cp_set.keyIterator();
         while (it.next()) |key| {
-            try chars.append(allocator, key.*);
+            try cps.append(allocator, key.*);
         }
-        const sorted = try chars.toOwnedSlice(allocator);
-        std.mem.sort(u8, sorted, {}, std.sort.asc(u8));
+        const sorted = try cps.toOwnedSlice(allocator);
+        std.mem.sort(u21, sorted, {}, std.sort.asc(u21));
 
         const bos = sorted.len;
         return .{
@@ -90,18 +92,29 @@ const Tokenizer = struct {
     }
 
     fn encode(self: *const Tokenizer, allocator: Allocator, doc: []const u8) ![]usize {
-        // BOS + char tokens + BOS
-        var tokens: std.ArrayList(usize) = try .initCapacity(allocator, doc.len + 2);
+        // Count codepoints for capacity
+        var count: usize = 0;
+        {
+            const view = std.unicode.Utf8View.initUnchecked(doc);
+            var iter = view.iterator();
+            while (iter.nextCodepoint()) |_| count += 1;
+        }
+        // BOS + codepoint tokens + BOS
+        var tokens: std.ArrayList(usize) = try .initCapacity(allocator, count + 2);
         try tokens.append(allocator, self.bos);
-        for (doc) |ch| {
-            const idx = std.mem.indexOf(u8, self.uchars, &[_]u8{ch}) orelse return error.UnknownChar;
+        const view = std.unicode.Utf8View.initUnchecked(doc);
+        var iter = view.iterator();
+        while (iter.nextCodepoint()) |cp| {
+            const idx = for (self.uchars, 0..) |uc, i| {
+                if (uc == cp) break i;
+            } else return error.UnknownChar;
             try tokens.append(allocator, idx);
         }
         try tokens.append(allocator, self.bos);
         return try tokens.toOwnedSlice(allocator);
     }
 
-    fn decode(self: *const Tokenizer, token_id: usize) ?u8 {
+    fn decode(self: *const Tokenizer, token_id: usize) ?u21 {
         if (token_id >= self.uchars.len) return null; // BOS
         return self.uchars[token_id];
     }
@@ -256,8 +269,8 @@ const Value = struct {
     fn backward(self: *Value, allocator: Allocator, generation: u32) !void {
         // Build topological order (iterative DFS)
         // Pre-size to avoid repeated ArrayList reallocations in the arena.
-        // With n_embd=32, block_size=32: graph is ~200-300K nodes per step.
-        const estimated_nodes = 300_000;
+        // With n_embd=32, block_size=16: graph is ~80-120K nodes per step.
+        const estimated_nodes = 150_000;
         var topo: std.ArrayList(*Value) = .empty;
         defer topo.deinit(allocator);
         try topo.ensureTotalCapacity(allocator, estimated_nodes);
@@ -609,8 +622,8 @@ pub fn main() !void {
     // Pre-allocate a reusable buffer for per-step computation graphs.
     // FixedBufferAllocator avoids mmap/munmap syscalls that page_allocator
     // would issue on every ArenaAllocator chunk request.
-    // With n_embd=32 and block_size=32, each step graph is ~200-300K nodes.
-    const step_buf = try allocator.alloc(u8, 256 * 1024 * 1024); // 256 MB
+    // With n_embd=32 and block_size=16 (codepoint tokenizer), ~80-120K nodes.
+    const step_buf = try allocator.alloc(u8, 128 * 1024 * 1024); // 128 MB
     defer allocator.free(step_buf);
 
     // --- Training loop ---
@@ -697,8 +710,12 @@ pub fn main() !void {
 
             token_id = weightedSample(weights, rng);
             if (token_id == tok.bos) break;
-            if (tok.decode(token_id)) |ch| {
-                try sample.append(inf_alloc, ch);
+            if (tok.decode(token_id)) |cp| {
+                var buf: [4]u8 = undefined;
+                const len = std.unicode.utf8Encode(cp, &buf) catch unreachable;
+                for (buf[0..len]) |b| {
+                    try sample.append(inf_alloc, b);
+                }
             }
         }
 
@@ -763,4 +780,32 @@ test "Tokenizer encode decode" {
     try std.testing.expectEqual(@as(usize, 5), encoded.len); // BOS + a + b + c + BOS
     try std.testing.expectEqual(@as(usize, 3), encoded[0]); // BOS
     try std.testing.expectEqual(@as(usize, 3), encoded[4]); // BOS
+}
+
+test "Tokenizer codepoint Hanja" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // Two docs with 4 unique Hanja codepoints: 甲 乙 子 丑
+    const docs = [_][]const u8{ "甲子", "乙丑" };
+    const tok = try Tokenizer.init(alloc, &docs);
+
+    try std.testing.expectEqual(@as(usize, 5), tok.vocab_size); // 4 Hanja + BOS
+    try std.testing.expectEqual(@as(usize, 4), tok.bos);
+
+    const encoded = try tok.encode(alloc, "甲子");
+    try std.testing.expectEqual(@as(usize, 4), encoded.len); // BOS + 甲 + 子 + BOS
+    try std.testing.expectEqual(@as(usize, 4), encoded[0]); // BOS
+    try std.testing.expectEqual(@as(usize, 4), encoded[3]); // BOS
+
+    // Decode round-trip: decode each non-BOS token and re-encode to UTF-8
+    var result: [6]u8 = undefined; // 2 codepoints * max 3 bytes
+    var pos: usize = 0;
+    for (encoded[1..3]) |tid| {
+        const cp = tok.decode(tid).?;
+        const len = std.unicode.utf8Encode(cp, result[pos..]) catch unreachable;
+        pos += len;
+    }
+    try std.testing.expectEqualStrings("甲子", result[0..pos]);
 }
