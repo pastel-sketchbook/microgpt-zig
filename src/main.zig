@@ -3,11 +3,11 @@ const math = std.math;
 const Allocator = std.mem.Allocator;
 
 // ============================================================================
-// Hyperparameters (matching Python reference)
+// Hyperparameters (tuned for Hanja four-pillar data: 24 UTF-8 bytes per doc)
 // ============================================================================
 const n_layer: usize = 1;
-const n_embd: usize = 16;
-const block_size: usize = 16;
+const n_embd: usize = 32;
+const block_size: usize = 32;
 const n_head: usize = 4;
 const head_dim: usize = n_embd / n_head;
 const num_steps: usize = 1000;
@@ -26,7 +26,7 @@ fn loadOrDownloadDataset(allocator: Allocator, filename: []const u8) ![][]const 
     // Try to read from local file first, download if not found
     const data = std.fs.cwd().readFileAlloc(allocator, filename, 10 * 1024 * 1024) catch |err| switch (err) {
         error.FileNotFound => blk: {
-            // Only auto-download the default dataset
+            // Only auto-download the default dataset (names fallback)
             if (!std.mem.eql(u8, filename, "data/input.txt")) {
                 std.debug.print("Error: file '{s}' not found\n", .{filename});
                 return err;
@@ -256,8 +256,8 @@ const Value = struct {
     fn backward(self: *Value, allocator: Allocator, generation: u32) !void {
         // Build topological order (iterative DFS)
         // Pre-size to avoid repeated ArrayList reallocations in the arena.
-        // Typical graph is ~38K nodes; 40K covers names up to block_size.
-        const estimated_nodes = 40_000;
+        // With n_embd=32, block_size=32: graph is ~200-300K nodes per step.
+        const estimated_nodes = 300_000;
         var topo: std.ArrayList(*Value) = .empty;
         defer topo.deinit(allocator);
         try topo.ensureTotalCapacity(allocator, estimated_nodes);
@@ -577,7 +577,7 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.skip(); // skip program name
-    const input_file = args.next() orelse "data/input.txt";
+    const input_file = args.next() orelse "data/saju_pillars.txt";
 
     // --- Dataset ---
     const docs = try loadOrDownloadDataset(allocator, input_file);
@@ -609,7 +609,8 @@ pub fn main() !void {
     // Pre-allocate a reusable buffer for per-step computation graphs.
     // FixedBufferAllocator avoids mmap/munmap syscalls that page_allocator
     // would issue on every ArenaAllocator chunk request.
-    const step_buf = try allocator.alloc(u8, 32 * 1024 * 1024); // 32 MB
+    // With n_embd=32 and block_size=32, each step graph is ~200-300K nodes.
+    const step_buf = try allocator.alloc(u8, 256 * 1024 * 1024); // 256 MB
     defer allocator.free(step_buf);
 
     // --- Training loop ---
@@ -665,7 +666,7 @@ pub fn main() !void {
 
     // --- Inference ---
     const temperature: f64 = 0.5;
-    print("\n--- inference (new, hallucinated names) ---\n", .{});
+    print("\n--- inference (hallucinated 사주 four pillars) ---\n", .{});
 
     for (0..20) |sample_idx| {
         var fba = std.heap.FixedBufferAllocator.init(step_buf);

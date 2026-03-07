@@ -23,18 +23,26 @@ tasks:
       - zig build run -Doptimize=ReleaseFast
 
   demo:
-    desc: Train a tiny GPT on names dataset and generate new names (ReleaseFast)
+    desc: Train on saju four-pillar data and generate new pillars (default)
     cmds:
-      - echo "=== microgpt-zig demo ==="
-      - echo "Training a 1-layer, 16-dim GPT on character-level names for 1000 steps..."
+      - echo "=== microgpt-zig demo (사주/四柱) ==="
+      - echo "Training a 1-layer, 32-dim GPT on Hanja four-pillar data for 1000 steps..."
       - echo ""
       - zig build run -Doptimize=ReleaseFast
+
+  demo:names:
+    desc: Train on English names dataset and generate new names
+    cmds:
+      - echo "=== microgpt-zig demo (English names) ==="
+      - echo "Training a 1-layer, 32-dim GPT on character-level names for 1000 steps..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast -- data/input.txt
 
   demo:korean:
     desc: Train on Korean (Hangul) names and generate new ones
     cmds:
       - echo "=== microgpt-zig demo (Korean/한국어) ==="
-      - echo "Training a 1-layer, 16-dim GPT on Hangul names for 1000 steps..."
+      - echo "Training a 1-layer, 32-dim GPT on Hangul names for 1000 steps..."
       - echo ""
       - zig build run -Doptimize=ReleaseFast -- data/korean_names.txt
 
