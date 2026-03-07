@@ -64,6 +64,24 @@ tasks:
     vars:
       PREFIX: '{{.PREFIX | default "壬申"}}'
 
+  demo:gunghap:
+    desc: Train on pair compatibility (궁합) data and classify pairs
+    cmds:
+      - echo "=== microgpt-zig demo (궁합/宮合 pair compatibility) ==="
+      - echo "Training a 1-layer, 32-dim GPT on gunghap data for 1000 steps..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast -- data/saju_gunghap.txt
+
+  demo:gunghap:classify:
+    desc: Classify a saju pair (provide two 8-char pillars separated by |)
+    cmds:
+      - echo "=== microgpt-zig gunghap classification ==="
+      - echo "Classifying pair {{.PAIR}}..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast -- data/saju_gunghap.txt {{.PAIR}}
+    vars:
+      PAIR: '{{.PAIR | default "壬申庚戌癸酉乙卯|甲子丙寅戊辰庚午"}}'
+
   test:
     desc: Run tests
     cmds:

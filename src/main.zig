@@ -4,7 +4,8 @@ const Allocator = std.mem.Allocator;
 
 // ============================================================================
 // Hyperparameters (tuned for element-annotated Hanja four-pillar data:
-// 8 pillar codepoints + "|" + 8 element codepoints = 17 codepoints per doc)
+// 8 pillar codepoints + "|" + 8 element codepoints = 17 codepoints per doc,
+// or gunghap pair data: 8+"|"+8+"|"+label = 19 codepoints per doc)
 // ============================================================================
 const n_layer: usize = 1;
 const n_embd: usize = 32;
@@ -245,6 +246,36 @@ fn validateAnnotatedSaju(codepoints: []const u21) SajuValidity {
         if (branch_elem_cp != expected_branch_elem)
             return .{ .valid = false, .reason = "branch element mismatch" };
     }
+
+    return .{ .valid = true, .reason = "valid" };
+}
+
+// 궁합 (Gunghap) compatibility labels: 상(good), 중(moderate), 하(poor)
+const gunghap_labels = [_]u21{ '상', '중', '하' };
+
+/// Validate a gunghap pair compatibility sequence (19 codepoints:
+/// 8 pillar A + "|" + 8 pillar B + "|" + 1 label).
+fn validateGunghap(codepoints: []const u21) SajuValidity {
+    if (codepoints.len != 19) return .{ .valid = false, .reason = "gunghap length != 19" };
+
+    // Check separators at positions 8 and 17
+    if (codepoints[8] != separator) return .{ .valid = false, .reason = "missing separator at pos 8" };
+    if (codepoints[17] != separator) return .{ .valid = false, .reason = "missing separator at pos 17" };
+
+    // Validate pillar A (positions 0..8)
+    const a_validity = validateSaju(codepoints[0..8]);
+    if (!a_validity.valid) return .{ .valid = false, .reason = "pillar A invalid" };
+
+    // Validate pillar B (positions 9..17)
+    const b_validity = validateSaju(codepoints[9..17]);
+    if (!b_validity.valid) return .{ .valid = false, .reason = "pillar B invalid" };
+
+    // Check label is one of 상/중/하
+    const label_cp = codepoints[18];
+    const valid_label = for (gunghap_labels) |gl| {
+        if (gl == label_cp) break true;
+    } else false;
+    if (!valid_label) return .{ .valid = false, .reason = "invalid gunghap label" };
 
     return .{ .valid = true, .reason = "valid" };
 }
@@ -740,7 +771,7 @@ pub fn main() !void {
     // --- Parse and validate prefix (conditional generation) ---
     var prefix_tokens: []const usize = &.{};
     if (prefix_arg) |prefix| {
-        // Validate: count codepoints, must be even (stem-branch pairs)
+        // Validate: count codepoints, check within block_size
         var cp_count: usize = 0;
         {
             const view = std.unicode.Utf8View.initUnchecked(prefix);
@@ -751,12 +782,8 @@ pub fn main() !void {
             print("Error: prefix is empty\n", .{});
             return;
         }
-        if (cp_count % 2 != 0) {
-            print("Error: prefix must have even number of codepoints (stem-branch pairs), got {d}\n", .{cp_count});
-            return;
-        }
-        if (cp_count > 8) {
-            print("Error: prefix too long ({d} codepoints, max 8 for four pillars)\n", .{cp_count});
+        if (cp_count >= block_size) {
+            print("Error: prefix too long ({d} codepoints, max {d})\n", .{ cp_count, block_size - 1 });
             return;
         }
         // Encode prefix codepoints as token IDs (without BOS wrapper)
@@ -777,7 +804,7 @@ pub fn main() !void {
             }
         }
         prefix_tokens = try ptoks.toOwnedSlice(allocator);
-        print("prefix: {s} ({d} codepoints, {d} pillars)\n", .{ prefix, prefix_tokens.len, prefix_tokens.len / 2 });
+        print("prefix: {s} ({d} codepoints)\n", .{ prefix, prefix_tokens.len });
     }
 
     // --- Initialize parameters ---
@@ -908,7 +935,9 @@ pub fn main() !void {
                 }
             }
 
-            const validity = if (sample_cps.items.len == 17)
+            const validity = if (sample_cps.items.len == 19)
+                validateGunghap(sample_cps.items)
+            else if (sample_cps.items.len == 17)
                 validateAnnotatedSaju(sample_cps.items)
             else if (sample_cps.items.len == 8)
                 validateSaju(sample_cps.items)
@@ -1149,4 +1178,72 @@ test "validateAnnotatedSaju branch element mismatch" {
     const v = validateAnnotatedSaju(&cps);
     try std.testing.expect(!v.valid);
     try std.testing.expectEqualStrings("branch element mismatch", v.reason);
+}
+
+// ============================================================================
+// Gunghap Validation Tests
+// ============================================================================
+
+test "validateGunghap valid" {
+    // Two valid saju + separator + label 상
+    // Person A: 甲子丙寅甲子甲子 (valid four pillars)
+    // Person B: 甲子丙寅甲子甲子 (same, valid)
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '상' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(v.valid);
+}
+
+test "validateGunghap wrong length" {
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("gunghap length != 19", v.reason);
+}
+
+test "validateGunghap missing first separator" {
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '甲', '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '상' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("missing separator at pos 8", v.reason);
+}
+
+test "validateGunghap missing second separator" {
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '甲', '상' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("missing separator at pos 17", v.reason);
+}
+
+test "validateGunghap invalid label" {
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '木' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("invalid gunghap label", v.reason);
+}
+
+test "validateGunghap invalid pillar A" {
+    // Parity mismatch in person A: 甲(0)丑(1)
+    const cps = [_]u21{ '甲', '丑', '丙', '寅', '甲', '子', '甲', '子', '|', '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '중' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("pillar A invalid", v.reason);
+}
+
+test "validateGunghap invalid pillar B" {
+    // Parity mismatch in person B: 甲(0)丑(1)
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '甲', '丑', '丙', '寅', '甲', '子', '甲', '子', '|', '하' };
+    const v = validateGunghap(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("pillar B invalid", v.reason);
+}
+
+test "validateGunghap all labels accepted" {
+    const base = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|', '甲', '子', '丙', '寅', '甲', '子', '甲', '子', '|' };
+    for (gunghap_labels) |label| {
+        var cps: [19]u21 = undefined;
+        @memcpy(cps[0..18], &base);
+        cps[18] = label;
+        const v = validateGunghap(&cps);
+        try std.testing.expect(v.valid);
+    }
 }
