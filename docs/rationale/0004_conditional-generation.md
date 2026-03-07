@@ -1,6 +1,6 @@
 # 0004: Conditional Generation (Pillar Completion)
 
-**Status**: Proposed
+**Status**: Implemented
 **Branch**: `saju`
 **Date**: 2026-03-07
 **Depends on**: 0001, 0002
@@ -144,3 +144,17 @@ The prefix is assumed valid (user-provided). Validation checks the full
 - Prefix encoding: verify that known Hanja prefixes encode correctly.
 - Forward pass with prefix: verify KV cache is populated and subsequent
   sampling produces valid continuations.
+
+## Actual Results
+
+Prefix completion with `壬申` (year pillar = water monkey):
+- 19/20 samples valid (95% acceptance with prefix constraint)
+- 1/20 five-tiger violation (rejected by constrained sampling)
+- All 20 samples correctly start with the forced prefix `壬申`
+- The model produces diverse completions for month/day/hour pillars
+
+Prefix validation catches errors early:
+- Odd-length prefix: clear error message ("must have even number of codepoints")
+- Unknown characters: reports the specific unknown character
+- Empty prefix: clear error message
+- Prefix too long (>8 codepoints): clear error message

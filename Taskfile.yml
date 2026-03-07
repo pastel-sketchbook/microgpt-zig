@@ -46,6 +46,16 @@ tasks:
       - echo ""
       - zig build run -Doptimize=ReleaseFast -- data/korean_names.txt
 
+  demo:complete:
+    desc: Complete a partial saju from a given prefix (default 壬申)
+    cmds:
+      - echo "=== microgpt-zig conditional generation ==="
+      - echo "Completing from prefix {{.PREFIX}}..."
+      - echo ""
+      - zig build run -Doptimize=ReleaseFast -- data/saju_pillars.txt {{.PREFIX}}
+    vars:
+      PREFIX: '{{.PREFIX | default "壬申"}}'
+
   test:
     desc: Run tests
     cmds:

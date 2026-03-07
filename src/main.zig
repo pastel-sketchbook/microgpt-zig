@@ -674,6 +674,7 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.skip(); // skip program name
     const input_file = args.next() orelse "data/saju_pillars.txt";
+    const prefix_arg: ?[]const u8 = args.next();
 
     // --- Dataset ---
     const docs = try loadOrDownloadDataset(allocator, input_file);
@@ -689,6 +690,49 @@ pub fn main() !void {
     // --- Tokenizer ---
     const tok = try Tokenizer.init(allocator, docs);
     print("vocab size: {d}\n", .{tok.vocab_size});
+
+    // --- Parse and validate prefix (conditional generation) ---
+    var prefix_tokens: []const usize = &.{};
+    if (prefix_arg) |prefix| {
+        // Validate: count codepoints, must be even (stem-branch pairs)
+        var cp_count: usize = 0;
+        {
+            const view = std.unicode.Utf8View.initUnchecked(prefix);
+            var iter = view.iterator();
+            while (iter.nextCodepoint()) |_| cp_count += 1;
+        }
+        if (cp_count == 0) {
+            print("Error: prefix is empty\n", .{});
+            return;
+        }
+        if (cp_count % 2 != 0) {
+            print("Error: prefix must have even number of codepoints (stem-branch pairs), got {d}\n", .{cp_count});
+            return;
+        }
+        if (cp_count > 8) {
+            print("Error: prefix too long ({d} codepoints, max 8 for four pillars)\n", .{cp_count});
+            return;
+        }
+        // Encode prefix codepoints as token IDs (without BOS wrapper)
+        var ptoks: std.ArrayList(usize) = try .initCapacity(allocator, cp_count);
+        {
+            const view = std.unicode.Utf8View.initUnchecked(prefix);
+            var iter = view.iterator();
+            while (iter.nextCodepoint()) |cp| {
+                const idx = for (tok.uchars, 0..) |uc, i| {
+                    if (uc == cp) break i;
+                } else {
+                    var buf: [4]u8 = undefined;
+                    const len = std.unicode.utf8Encode(cp, &buf) catch unreachable;
+                    print("Error: prefix contains unknown character: {s}\n", .{buf[0..len]});
+                    return;
+                };
+                try ptoks.append(allocator, idx);
+            }
+        }
+        prefix_tokens = try ptoks.toOwnedSlice(allocator);
+        print("prefix: {s} ({d} codepoints, {d} pillars)\n", .{ prefix, prefix_tokens.len, prefix_tokens.len / 2 });
+    }
 
     // --- Initialize parameters ---
     const sd = try StateDict.init(allocator, tok.vocab_size, rng);
@@ -763,7 +807,11 @@ pub fn main() !void {
     // --- Inference ---
     const temperature: f64 = 0.5;
     const max_attempts: usize = 50;
-    print("\n--- inference (hallucinated 사주 four pillars) ---\n", .{});
+    if (prefix_tokens.len > 0) {
+        print("\n--- inference (completing from prefix: {s}) ---\n", .{prefix_arg.?});
+    } else {
+        print("\n--- inference (hallucinated 사주 four pillars) ---\n", .{});
+    }
 
     for (0..20) |sample_idx| {
         var best_sample: std.ArrayList(u8) = .empty;
@@ -784,21 +832,26 @@ pub fn main() !void {
             for (0..block_size) |pos_id| {
                 const logits = try gpt(inf_alloc, &sd, token_id, pos_id, &kv_cache);
 
-                // Apply temperature
-                const scaled = try inf_alloc.alloc(*Value, logits.len);
-                for (logits, 0..) |l, i| {
-                    scaled[i] = try Value.mulScalar(inf_alloc, l, 1.0 / temperature);
-                }
-                const probs = try softmax(inf_alloc, scaled);
+                if (pos_id < prefix_tokens.len) {
+                    // Teacher-force: run forward pass (for KV cache) but use prefix token
+                    token_id = prefix_tokens[pos_id];
+                } else {
+                    // Sample: apply temperature and sample from distribution
+                    const scaled = try inf_alloc.alloc(*Value, logits.len);
+                    for (logits, 0..) |l, i| {
+                        scaled[i] = try Value.mulScalar(inf_alloc, l, 1.0 / temperature);
+                    }
+                    const probs = try softmax(inf_alloc, scaled);
 
-                // Extract probabilities as f64 for sampling
-                const weights = try inf_alloc.alloc(f64, probs.len);
-                for (probs, 0..) |p, i| {
-                    weights[i] = p.data;
+                    const weights = try inf_alloc.alloc(f64, probs.len);
+                    for (probs, 0..) |p, i| {
+                        weights[i] = p.data;
+                    }
+
+                    token_id = weightedSample(weights, rng);
+                    if (token_id == tok.bos) break;
                 }
 
-                token_id = weightedSample(weights, rng);
-                if (token_id == tok.bos) break;
                 if (tok.decode(token_id)) |cp| {
                     try sample_cps.append(inf_alloc, cp);
                     var buf: [4]u8 = undefined;
@@ -810,7 +863,6 @@ pub fn main() !void {
             }
 
             const validity = validateSaju(sample_cps.items);
-            // Keep the latest attempt for display if none pass
             best_sample = sample;
             best_validity = validity;
             if (validity.valid) break;
