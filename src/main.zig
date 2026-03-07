@@ -121,6 +121,89 @@ const Tokenizer = struct {
 };
 
 // ============================================================================
+// Saju Validation
+// ============================================================================
+
+// 천간 (Heavenly Stems): 甲乙丙丁戊己庚辛壬癸
+const stems = [_]u21{ '甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸' };
+// 지지 (Earthly Branches): 子丑寅卯辰巳午未申酉戌亥
+const branches = [_]u21{ '子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥' };
+
+fn stemIndex(cp: u21) ?usize {
+    return for (stems, 0..) |s, i| {
+        if (s == cp) break i;
+    } else null;
+}
+
+fn branchIndex(cp: u21) ?usize {
+    return for (branches, 0..) |b, i| {
+        if (b == cp) break i;
+    } else null;
+}
+
+/// Five-Tiger Escape (오호둔갑): year stem → month stem cycle start index.
+/// Year stems [0..9] grouped by pairs: (甲己→2丙, 乙庚→4戊, 丙辛→6庚, 丁壬→8壬, 戊癸→0甲)
+fn monthStemStart(year_stem_idx: usize) usize {
+    const table = [_]usize{ 2, 2, 4, 4, 6, 6, 8, 8, 0, 0 };
+    return table[year_stem_idx];
+}
+
+/// Five-Rat Escape (오서둔갑): day stem → hour stem cycle start index.
+/// Day stems [0..9] grouped by pairs: (甲己→0甲, 乙庚→2丙, 丙辛→4戊, 丁壬→6庚, 戊癸→8壬)
+fn hourStemStart(day_stem_idx: usize) usize {
+    const table = [_]usize{ 0, 0, 2, 2, 4, 4, 6, 6, 8, 8 };
+    return table[day_stem_idx];
+}
+
+const SajuValidity = struct {
+    valid: bool,
+    reason: []const u8,
+};
+
+/// Validate an 8-codepoint saju four-pillar sequence.
+/// Checks: length, stem/branch positions, parity, five-tiger, five-rat rules.
+fn validateSaju(codepoints: []const u21) SajuValidity {
+    const ok: SajuValidity = .{ .valid = true, .reason = "valid" };
+
+    if (codepoints.len != 8) return .{ .valid = false, .reason = "length != 8" };
+
+    // Parse stem/branch indices for all 4 pillars
+    var si: [4]usize = undefined; // stem indices
+    var bi: [4]usize = undefined; // branch indices
+    for (0..4) |p| {
+        si[p] = stemIndex(codepoints[p * 2]) orelse
+            return .{ .valid = false, .reason = "invalid stem" };
+        bi[p] = branchIndex(codepoints[p * 2 + 1]) orelse
+            return .{ .valid = false, .reason = "invalid branch" };
+    }
+
+    // Rule 1: Sexagenary parity — stem and branch must share yin/yang
+    for (0..4) |p| {
+        if (si[p] % 2 != bi[p] % 2)
+            return .{ .valid = false, .reason = "parity mismatch" };
+    }
+
+    // Rule 2: Five-Tiger — month stem from year stem
+    // Month branch encodes month number: 寅(idx 2)=month 1, 卯(3)=2, ..., 丑(1)=12
+    // Month stem = (start + month_offset) % 10
+    const month_branch = bi[1];
+    // Map branch index to month offset (寅=0, 卯=1, ..., 子=10, 丑=11)
+    const month_offset: usize = if (month_branch >= 2) month_branch - 2 else month_branch + 10;
+    const expected_month_stem = (monthStemStart(si[0]) + month_offset) % 10;
+    if (si[1] != expected_month_stem)
+        return .{ .valid = false, .reason = "five-tiger violation" };
+
+    // Rule 3: Five-Rat — hour stem from day stem
+    // Hour branch encodes hour: 子(0)=23-01h, 丑(1)=01-03h, ...
+    const hour_branch = bi[3];
+    const expected_hour_stem = (hourStemStart(si[2]) + hour_branch) % 10;
+    if (si[3] != expected_hour_stem)
+        return .{ .valid = false, .reason = "five-rat violation" };
+
+    return ok;
+}
+
+// ============================================================================
 // Autograd: Value
 // ============================================================================
 const MAX_CHILDREN = 2;
@@ -679,47 +762,65 @@ pub fn main() !void {
 
     // --- Inference ---
     const temperature: f64 = 0.5;
+    const max_attempts: usize = 50;
     print("\n--- inference (hallucinated 사주 four pillars) ---\n", .{});
 
     for (0..20) |sample_idx| {
-        var fba = std.heap.FixedBufferAllocator.init(step_buf);
-        var arena = std.heap.ArenaAllocator.init(fba.allocator());
-        defer arena.deinit();
-        const inf_alloc = arena.allocator();
+        var best_sample: std.ArrayList(u8) = .empty;
+        var best_validity: SajuValidity = .{ .valid = false, .reason = "no attempt" };
 
-        var kv_cache = KVCache.init();
-        defer kv_cache.deinit(inf_alloc);
-        var token_id: usize = tok.bos;
-        var sample: std.ArrayList(u8) = .empty;
+        for (0..max_attempts) |_| {
+            var fba = std.heap.FixedBufferAllocator.init(step_buf);
+            var arena = std.heap.ArenaAllocator.init(fba.allocator());
+            defer arena.deinit();
+            const inf_alloc = arena.allocator();
 
-        for (0..block_size) |pos_id| {
-            const logits = try gpt(inf_alloc, &sd, token_id, pos_id, &kv_cache);
+            var kv_cache = KVCache.init();
+            defer kv_cache.deinit(inf_alloc);
+            var token_id: usize = tok.bos;
+            var sample: std.ArrayList(u8) = .empty;
+            var sample_cps: std.ArrayList(u21) = .empty;
 
-            // Apply temperature
-            const scaled = try inf_alloc.alloc(*Value, logits.len);
-            for (logits, 0..) |l, i| {
-                scaled[i] = try Value.mulScalar(inf_alloc, l, 1.0 / temperature);
-            }
-            const probs = try softmax(inf_alloc, scaled);
+            for (0..block_size) |pos_id| {
+                const logits = try gpt(inf_alloc, &sd, token_id, pos_id, &kv_cache);
 
-            // Extract probabilities as f64 for sampling
-            const weights = try inf_alloc.alloc(f64, probs.len);
-            for (probs, 0..) |p, i| {
-                weights[i] = p.data;
-            }
+                // Apply temperature
+                const scaled = try inf_alloc.alloc(*Value, logits.len);
+                for (logits, 0..) |l, i| {
+                    scaled[i] = try Value.mulScalar(inf_alloc, l, 1.0 / temperature);
+                }
+                const probs = try softmax(inf_alloc, scaled);
 
-            token_id = weightedSample(weights, rng);
-            if (token_id == tok.bos) break;
-            if (tok.decode(token_id)) |cp| {
-                var buf: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(cp, &buf) catch unreachable;
-                for (buf[0..len]) |b| {
-                    try sample.append(inf_alloc, b);
+                // Extract probabilities as f64 for sampling
+                const weights = try inf_alloc.alloc(f64, probs.len);
+                for (probs, 0..) |p, i| {
+                    weights[i] = p.data;
+                }
+
+                token_id = weightedSample(weights, rng);
+                if (token_id == tok.bos) break;
+                if (tok.decode(token_id)) |cp| {
+                    try sample_cps.append(inf_alloc, cp);
+                    var buf: [4]u8 = undefined;
+                    const len = std.unicode.utf8Encode(cp, &buf) catch unreachable;
+                    for (buf[0..len]) |b| {
+                        try sample.append(inf_alloc, b);
+                    }
                 }
             }
+
+            const validity = validateSaju(sample_cps.items);
+            // Keep the latest attempt for display if none pass
+            best_sample = sample;
+            best_validity = validity;
+            if (validity.valid) break;
         }
 
-        print("sample {d:2}: {s}\n", .{ sample_idx + 1, sample.items });
+        if (best_validity.valid) {
+            print("sample {d:2}: {s}\n", .{ sample_idx + 1, best_sample.items });
+        } else {
+            print("sample {d:2}: {s}  [{s}]\n", .{ sample_idx + 1, best_sample.items, best_validity.reason });
+        }
     }
 }
 
@@ -808,4 +909,88 @@ test "Tokenizer codepoint Hanja" {
         pos += len;
     }
     try std.testing.expectEqualStrings("甲子", result[0..pos]);
+}
+
+// ============================================================================
+// Saju Validation Tests
+// ============================================================================
+
+test "validateSaju valid pillar" {
+    // 甲子丙寅甲子甲子  — valid four pillars
+    // Year: 甲(0)子(0) — parity ok (both even)
+    // Month: 丙(2)寅(2) — monthStemStart(0)=2, offset=寅(2)-2=0, expected=(2+0)%10=2=丙 ✓
+    // Day: 甲(0)子(0) — parity ok
+    // Hour: 甲(0)子(0) — hourStemStart(0)=0, expected=(0+0)%10=0=甲 ✓
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '甲', '子' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(v.valid);
+}
+
+test "validateSaju wrong length" {
+    const cps = [_]u21{ '甲', '子', '丙', '寅' }; // only 4 codepoints
+    const v = validateSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("length != 8", v.reason);
+}
+
+test "validateSaju invalid stem" {
+    // Replace first stem with a branch character (子 is not a stem)
+    const cps = [_]u21{ '子', '子', '丙', '寅', '甲', '子', '甲', '子' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("invalid stem", v.reason);
+}
+
+test "validateSaju invalid branch" {
+    // Replace first branch with a stem character (乙 is not a branch)
+    const cps = [_]u21{ '甲', '乙', '丙', '寅', '甲', '子', '甲', '子' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("invalid branch", v.reason);
+}
+
+test "validateSaju parity mismatch" {
+    // 甲(0) + 丑(1) — even stem, odd branch = parity mismatch
+    const cps = [_]u21{ '甲', '丑', '丙', '寅', '甲', '子', '甲', '子' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("parity mismatch", v.reason);
+}
+
+test "validateSaju five-tiger violation" {
+    // Valid parity but wrong month stem for the year stem
+    // Year: 甲(0)子(0) — monthStemStart(0)=2, month branch 寅(2) offset=0
+    // Expected month stem: (2+0)%10=2=丙, but we use 戊(4)
+    const cps = [_]u21{ '甲', '子', '戊', '寅', '甲', '子', '甲', '子' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("five-tiger violation", v.reason);
+}
+
+test "validateSaju five-rat violation" {
+    // Valid everything except hour stem
+    // Day: 甲(0)子(0) — hourStemStart(0)=0, hour branch 子(0)
+    // Expected hour stem: (0+0)%10=0=甲, but we use 丙(2)
+    const cps = [_]u21{ '甲', '子', '丙', '寅', '甲', '子', '丙', '子' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(!v.valid);
+    try std.testing.expectEqualStrings("five-rat violation", v.reason);
+}
+
+test "validateSaju second valid example" {
+    // 乙丑丁亥乙丑丁丑
+    // Year: 乙(1)丑(1) — parity ok (both odd)
+    // Month: branch 亥(11), offset = 11-2=9, monthStemStart(1)=2, expected=(2+9)%10=1 → but 丁=3?
+    // Wait, let me recalculate...
+    // monthStemStart(year_stem_idx=1) → table[1]=2
+    // 亥 is branch idx 11, offset = 11-2 = 9
+    // expected_month_stem = (2 + 9) % 10 = 11 % 10 = 1 = 乙
+    // So month stem should be 乙(1), month pillar: 乙亥
+    // Day: 乙(1)丑(1) — parity ok
+    // Hour: branch 丑(1), hourStemStart(day_stem=1)=0
+    // expected_hour_stem = (0+1)%10 = 1 = 乙
+    // Hour pillar: 乙丑
+    const cps = [_]u21{ '乙', '丑', '乙', '亥', '乙', '丑', '乙', '丑' };
+    const v = validateSaju(&cps);
+    try std.testing.expect(v.valid);
 }

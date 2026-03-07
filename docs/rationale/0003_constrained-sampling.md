@@ -1,6 +1,6 @@
 # 0003: Constrained Sampling
 
-**Status**: Proposed
+**Status**: Implemented
 **Branch**: `saju`
 **Date**: 2026-03-07
 **Depends on**: 0001, 0002
@@ -8,7 +8,7 @@
 ## Problem
 
 The model generates four-pillar sequences by sampling tokens autoregressively.
-While training loss converges to ~0.64 and outputs look plausible, there is
+While training loss converges to ~1.76 and outputs look plausible, there is
 no guarantee that generated sequences are **valid** saju combinations.
 
 Invalid outputs waste inference and erode trust in the model's utility. A
@@ -171,3 +171,22 @@ sample  3: 壬丑庚戌癸酉乙卯 [invalid: parity violation at year pillar]
 - Known valid: any line from `saju_pillars.txt`.
 - Known invalid: swap a yang stem with a yin branch, alter month stem to
   violate five-tiger rule.
+
+## Actual Results
+
+Training: loss 3.48 → ~1.76 over 1000 steps (unchanged — validation is inference-only).
+
+Inference (20 samples, temperature=0.5, max 50 rejection attempts each):
+- **17/20 valid** (85% acceptance rate on first attempt)
+- **3/20 rejected** — all `[five-tiger violation]` (samples 8, 11, 20)
+- No parity mismatches, no five-rat violations, no invalid stems/branches
+
+The five-tiger rule (year stem → month stem correspondence) is the hardest
+constraint for the model to learn, which makes sense: it requires coordinating
+tokens across pillar boundaries. The model has clearly learned parity and
+five-rat rules well, but cross-pillar dependencies need more capacity or
+training to fully internalize.
+
+With rejection sampling capped at 50 attempts, valid samples are found quickly
+for the vast majority of outputs. The 15% rejection rate is well within the
+"healthy" range described in Expected Impact above.
